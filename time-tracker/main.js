@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 
 // Укажите тот же GitHub-аккаунт и репозиторий, что и в package.json (build.publish)
-const GH_OWNER = 'YOUR_GITHUB_USERNAME';
+const GH_OWNER = 'Titelll';
 const GH_REPO = 'time-tracker';
 
 const dataFile = () => path.join(app.getPath('userData'), 'timetracker-data.json');
