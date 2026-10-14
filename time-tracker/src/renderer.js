@@ -92,11 +92,63 @@ function buildIndex() {
 }
 
 /* ======================= timer ======================= */
+// Что показывает таймер: если вписана задача, то всё время по ней за сегодня (плюс текущий запуск),
+// иначе только текущий запуск.
+function clockMs() {
+  const name = $('#taskInput').value.trim();
+  const run = A.timer.running;
+  const now = Date.now();
+  if (!name) return run ? now - A.timer.startedAt : 0;
+  const t = canonicalTask(name).trim().toLowerCase();
+  const d0 = sod(now).getTime();
+  let ms = 0;
+  for (const s of A.sessions) {
+    if (s.end <= d0 || s.task.trim().toLowerCase() !== t) continue;
+    ms += s.end - Math.max(s.start, d0);
+  }
+  if (run) ms += now - Math.max(A.timer.startedAt, d0);
+  return ms;
+}
+
+function refreshClock() {
+  if (!A) return;
+  const txt = fmtHMS(clockMs());
+  $('#clock').textContent = txt;
+  $('#focusClock').textContent = txt;
+  $('#focusSub').textContent = $('#taskInput').value.trim() ? 'Сегодня по этой задаче' : 'Текущий запуск';
+}
+
+function commitTask() {
+  if (A && A.timer.running) { A.timer.task = $('#taskInput').value.trim(); save(); }
+}
+function setTaskInputs(v) { $('#taskInput').value = v; $('#focusTask').value = v; }
+function openFocus() {
+  if (!A) return;
+  $('#focusTask').value = $('#taskInput').value;
+  $('#focus').classList.remove('hidden');
+  updateTimerUI();
+}
+function closeFocus() { $('#focus').classList.add('hidden'); }
+
+// Объединяет повторяющиеся задачи (сегменты одного дня) в одну строку с общим временем
+function groupSessions(list) {
+  const map = new Map();
+  for (const x of list) {
+    const k = x.task.trim().toLowerCase();
+    let g = map.get(k);
+    if (!g) { g = { name: x.task, ms: 0, count: 0, live: false, ids: [], last: 0 }; map.set(k, g); }
+    g.ms += x.ms; g.count++; g.last = Math.max(g.last, x.segEnd);
+    if (x.live) g.live = true; else if (!g.ids.includes(x.id)) g.ids.push(x.id);
+  }
+  return [...map.values()].sort((a, b) => b.last - a.last);
+}
+
 function startTimer() {
   if (A.timer.running) return;
   const task = canonicalTask($('#taskInput').value);
   if (task !== 'Без задачи' && !A.tasks.includes(task)) A.tasks.push(task);
-  A.timer = { running: true, startedAt: Date.now(), task: $('#taskInput').value.trim() };
+  if (task !== 'Без задачи') setTaskInputs(task);
+  A.timer = { running: true, startedAt: Date.now(), task: task === 'Без задачи' ? '' : task };
   save();
   updateTimerUI();
   renderView();
@@ -117,7 +169,9 @@ function updateTimerUI() {
   const run = A.timer.running;
   $('#timerBox').classList.toggle('running', run);
   $('#toggleBtn').textContent = run ? 'Стоп' : 'Старт';
-  $('#clock').textContent = fmtHMS(run ? Date.now() - A.timer.startedAt : 0);
+  $('#focus').classList.toggle('running', run);
+  $('#focusToggle').textContent = run ? 'Стоп' : 'Старт';
+  refreshClock();
   const idx = buildIndex();
   const t = idx[dateKey(new Date())];
   $('#todayTotal').textContent = fmtDur(t ? t.total : 0);
@@ -127,7 +181,7 @@ function updateTimerUI() {
 function tick() {
   if (!A) return;
   const run = A.timer.running;
-  $('#clock').textContent = fmtHMS(run ? Date.now() - A.timer.startedAt : 0);
+  refreshClock();
   if (!run) return;
   const t = buildIndex()[dateKey(new Date())];
   $('#todayTotal').textContent = fmtDur(t ? t.total : 0);
@@ -169,7 +223,7 @@ function renderTasks() {
   const todayKey = dateKey(new Date());
   const today = idx[todayKey];
 
-  const names = Array.from(new Set([...A.tasks, ...Object.keys(totals)])).filter((n) => n !== 'Без задачи');
+  const names = A.tasks.filter((n) => n !== 'Без задачи');
   const taskRows = names.length
     ? names.map((n) => `
       <div class="item">
@@ -180,13 +234,14 @@ function renderTasks() {
       </div>`).join('')
     : '<div class="empty">Пока пусто. Добавьте задачу или просто впишите её в поле над кнопкой «Старт».</div>';
 
-  const sessRows = today && today.sessions.length
-    ? today.sessions.slice().sort((a, b) => b.segStart - a.segStart).map((s) => `
+  const groups = today && today.sessions.length ? groupSessions(today.sessions) : [];
+  const sessRows = groups.length
+    ? groups.map((g) => `
       <div class="item">
-        ${s.live ? '<span class="live-dot"></span>' : ''}
-        <span class="name">${esc(s.task)}</span>
-        <span class="time">${fmtClock(s.segStart)} – ${s.live ? 'сейчас' : fmtClock(s.segEnd)}</span>
-        <span class="time">${fmtDur(s.ms)}</span>
+        ${g.live ? '<span class="live-dot"></span>' : ''}
+        <span class="name">${esc(g.name)}</span>
+        ${g.count > 1 ? `<span class="time">×${g.count}</span>` : ''}
+        <span class="time">${fmtDur(g.ms)}</span>
       </div>`).join('')
     : '<div class="empty">Сегодня ещё нет записей. Запустите таймер.</div>';
 
@@ -218,7 +273,9 @@ function renderTasks() {
     if (A.timer.running) { A.timer.task = b.dataset.pick; save(); renderView(); }
   }));
   $('#main').querySelectorAll('[data-deltask]').forEach((b) => (b.onclick = () => {
-    A.tasks = A.tasks.filter((t) => t !== b.dataset.deltask);
+    const n = b.dataset.deltask;
+    if (!confirm(`Убрать «${n}» из списка задач?\nЗаписи времени в календаре и статистике останутся.`)) return;
+    A.tasks = A.tasks.filter((t) => t !== n);
     save(); renderView();
   }));
 }
@@ -309,15 +366,15 @@ function renderDayPanel(idx) {
   const info = idx[selKey];
   const meta = A.days[selKey] || {};
   const d = keyToDate(selKey);
-  const sessions = info ? info.sessions.slice().sort((a, b) => a.segStart - b.segStart) : [];
+  const groups = info ? groupSessions(info.sessions) : [];
 
-  const rows = sessions.length
-    ? sessions.map((s) => `
+  const rows = groups.length
+    ? groups.map((g) => `
       <div class="item">
-        ${s.live ? `<span class="live-dot"></span><span class="name">${esc(s.task)}</span>` :
-          `<input data-sid="${s.id}" value="${esc(s.task)}" class="name">`}
-        <span class="time">${fmtClock(s.segStart)}–${s.live ? '…' : fmtClock(s.segEnd)}<br>${fmtDur(s.ms)}</span>
-        ${s.live ? '' : `<button class="x" data-delsess="${s.id}" title="Удалить запись">×</button>`}
+        ${g.live ? `<span class="live-dot"></span><span class="name">${esc(g.name)}</span>` :
+          `<input data-ids="${g.ids.join(',')}" value="${esc(g.name)}" class="name">`}
+        <span class="time">${g.count > 1 ? `×${g.count}<br>` : ''}${fmtDur(g.ms)}</span>
+        ${g.live ? '' : `<button class="x" data-delids="${g.ids.join(',')}" data-gname="${esc(g.name)}" title="Удалить записи">×</button>`}
       </div>`).join('')
     : '<div class="empty">В этот день таймер не запускался.</div>';
 
@@ -345,15 +402,17 @@ function renderDayPanel(idx) {
   panel.querySelectorAll('[data-color]').forEach((b) => (b.onclick = () => { setMeta({ color: b.dataset.color }); renderView(); }));
   $('#customColor').onchange = (e) => { setMeta({ color: e.target.value }); renderView(); };
   $('#resetColor').onclick = () => { setMeta({ color: '' }); renderView(); };
-  panel.querySelectorAll('input[data-sid]').forEach((inp) => (inp.onchange = () => {
-    const s = A.sessions.find((x) => x.id === inp.dataset.sid);
-    if (!s) return;
-    s.task = canonicalTask(inp.value);
-    if (s.task !== 'Без задачи' && !A.tasks.includes(s.task)) A.tasks.push(s.task);
+  panel.querySelectorAll('input[data-ids]').forEach((inp) => (inp.onchange = () => {
+    const ids = inp.dataset.ids.split(',');
+    const name = canonicalTask(inp.value);
+    A.sessions.forEach((x) => { if (ids.includes(x.id)) x.task = name; });
+    if (name !== 'Без задачи' && !A.tasks.includes(name)) A.tasks.push(name);
     save(); renderView();
   }));
-  panel.querySelectorAll('[data-delsess]').forEach((b) => (b.onclick = () => {
-    A.sessions = A.sessions.filter((x) => x.id !== b.dataset.delsess);
+  panel.querySelectorAll('[data-delids]').forEach((b) => (b.onclick = () => {
+    if (!confirm(`Удалить все записи «${b.dataset.gname}» за этот день?`)) return;
+    const ids = b.dataset.delids.split(',');
+    A.sessions = A.sessions.filter((x) => !ids.includes(x.id));
     save(); renderView();
   }));
 }
@@ -569,7 +628,7 @@ function enterApp(login) {
   $('#auth').classList.add('hidden');
   $('#app').classList.remove('hidden');
   $('#userName').textContent = login;
-  $('#taskInput').value = A.timer.running ? A.timer.task : '';
+  setTaskInputs(A.timer.running ? A.timer.task : '');
   view = 'tasks';
   selKey = dateKey(new Date());
   const n = new Date();
@@ -579,6 +638,7 @@ function enterApp(login) {
 }
 
 function logout() {
+  closeFocus();
   if (A && A.timer.running) { A.timer.task = $('#taskInput').value.trim(); save(); }
   user = null; A = null;
   $('#app').classList.add('hidden');
@@ -635,7 +695,14 @@ function renderUpdate(s) {
   $('#loginInput').onkeydown = (e) => { if (e.key === 'Enter') $('#passInput').focus(); };
   $('#logoutBtn').onclick = logout;
   $('#toggleBtn').onclick = () => (A.timer.running ? stopTimer() : startTimer());
-  $('#taskInput').onchange = () => { if (A && A.timer.running) { A.timer.task = $('#taskInput').value.trim(); save(); } };
+  $('#taskInput').oninput = () => { $('#focusTask').value = $('#taskInput').value; refreshClock(); };
+  $('#taskInput').onchange = commitTask;
+  $('#focusTask').oninput = () => { $('#taskInput').value = $('#focusTask').value; refreshClock(); };
+  $('#focusTask').onchange = commitTask;
+  $('#focusToggle').onclick = () => (A.timer.running ? stopTimer() : startTimer());
+  $('#focusBack').onclick = closeFocus;
+  $('#clock').ondblclick = openFocus;
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeFocus(); });
   document.querySelectorAll('.nav button').forEach((b) => (b.onclick = () => { view = b.dataset.view; renderView(); }));
   window.api.version().then((v) => ($('#ver').textContent = 'v' + v));
   window.api.onUpdate(renderUpdate);

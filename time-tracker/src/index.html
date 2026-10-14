@@ -28,7 +28,7 @@
       <div class="brand">Time Tracker</div>
 
       <div class="timer" id="timerBox">
-        <div id="clock" class="clock">00:00:00</div>
+        <div id="clock" class="clock" title="Двойной клик: открыть таймер на весь экран">00:00:00</div>
         <input id="taskInput" list="taskList" placeholder="Над чем работаете?" autocomplete="off">
         <datalist id="taskList"></datalist>
         <button id="toggleBtn" class="btn primary wide">Старт</button>
@@ -50,6 +50,14 @@
       </div>
     </aside>
     <main id="main" class="main"></main>
+  </div>
+
+  <div id="focus" class="focus hidden">
+    <button id="focusBack" class="btn focus-back">← На главную</button>
+    <div id="focusSub" class="focus-sub">Текущий запуск</div>
+    <div id="focusClock" class="focus-clock">00:00:00</div>
+    <input id="focusTask" class="focus-task" list="taskList" placeholder="Над чем работаете?" autocomplete="off">
+    <button id="focusToggle" class="btn primary focus-toggle">Старт</button>
   </div>
 
   <div id="tip" class="tip"></div>
