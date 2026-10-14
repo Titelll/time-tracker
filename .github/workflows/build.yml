@@ -16,6 +16,9 @@ jobs:
       matrix:
         os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: time-tracker
     steps:
       - uses: actions/checkout@v4
 
@@ -42,6 +45,6 @@ jobs:
         with:
           name: installer-${{ matrix.os }}
           path: |
-            dist/*.exe
-            dist/*.dmg
+            time-tracker/dist/*.exe
+            time-tracker/dist/*.dmg
           if-no-files-found: error
