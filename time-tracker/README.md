@@ -31,14 +31,6 @@ macOS: ~/Library/Application Support/time-tracker/
 
 Запуск из исходников
 
-Нужен Node.js (LTS).
-
-npm install
-npm start
-Сборка установщиков
-npm run build:win    # Windows: установщик .exe
-npm run build:mac    # macOS: установщик .dmg
-
 Результат появляется в папке dist. Каждый установщик удобнее собирать на своей системе.
 
 Сборку можно запустить и на GitHub без установки чего-либо на компьютер: вкладка Actions, затем Build installers, затем Run workflow. Готовые файлы будут в разделе Artifacts завершённого запуска.
