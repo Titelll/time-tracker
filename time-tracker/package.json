@@ -58,6 +58,7 @@
         "provider": "github",
         "owner": "Titelll",
         "repo": "time-tracker"
+        "releaseType": "release"
       }
     ]
   },
