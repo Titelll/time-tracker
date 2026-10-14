@@ -7,5 +7,9 @@ contextBridge.exposeInMainWorld('api', {
   updateStatus: () => ipcRenderer.invoke('update-status'),
   onUpdate: (cb) => ipcRenderer.on('update-status', (_e, s) => cb(s)),
   installUpdate: () => ipcRenderer.invoke('install-update'),
-  openReleases: () => ipcRenderer.invoke('open-releases')
+  openReleases: () => ipcRenderer.invoke('open-releases'),
+  http: (req) => ipcRenderer.invoke('http', req),
+  hash: (password) => ipcRenderer.invoke('hash', password),
+  verify: (password, stored) => ipcRenderer.invoke('verify', password, stored),
+  emailFor: (login) => ipcRenderer.invoke('email-for', login)
 });

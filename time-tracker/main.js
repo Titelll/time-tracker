@@ -1,10 +1,11 @@
 const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
+const crypto = require('crypto');
 const fs = require('fs');
 
 // Укажите тот же GitHub-аккаунт и репозиторий, что и в package.json (build.publish)
-const GH_OWNER = 'Titelll';
+const GH_OWNER = 'YOUR_GITHUB_USERNAME';
 const GH_REPO = 'time-tracker';
 
 const dataFile = () => path.join(app.getPath('userData'), 'timetracker-data.json');
@@ -24,6 +25,49 @@ ipcMain.handle('save', (_e, data) => {
   fs.renameSync(tmp, dataFile());
   return true;
 });
+
+// ---------- защита аккаунтов и сеть (выполняется в основном процессе) ----------
+const ALLOWED_HOSTS = new Set(['identitytoolkit.googleapis.com', 'securetoken.googleapis.com', 'firestore.googleapis.com']);
+
+ipcMain.handle('http', async (_e, req) => {
+  const u = new URL(req.url);
+  if (u.protocol !== 'https:' || !ALLOWED_HOSTS.has(u.hostname)) throw new Error('host not allowed');
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 15000);
+  try {
+    const res = await fetch(req.url, {
+      method: req.method || 'GET',
+      headers: req.headers || {},
+      body: req.body,
+      signal: ctl.signal
+    });
+    let json = null;
+    try { json = await res.json(); } catch { /* пустой ответ */ }
+    return { status: res.status, json };
+  } finally {
+    clearTimeout(timer);
+  }
+});
+
+ipcMain.handle('hash', (_e, password) => {
+  const salt = crypto.randomBytes(16);
+  const h = crypto.scryptSync(String(password), salt, 64);
+  return `scrypt$${salt.toString('hex')}$${h.toString('hex')}`;
+});
+
+ipcMain.handle('verify', (_e, password, stored) => {
+  try {
+    const [alg, s, h] = String(stored).split('$');
+    if (alg !== 'scrypt') return false;
+    const calc = crypto.scryptSync(String(password), Buffer.from(s, 'hex'), 64);
+    return crypto.timingSafeEqual(calc, Buffer.from(h, 'hex'));
+  } catch {
+    return false;
+  }
+});
+
+ipcMain.handle('email-for', (_e, login) =>
+  'u' + crypto.createHash('sha256').update(String(login).trim().toLowerCase()).digest('hex').slice(0, 40) + '@timetracker.app');
 
 let lastUpdateStatus = null;
 

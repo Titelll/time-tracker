@@ -13,6 +13,8 @@
       <div class="auth-clock">00:00:00</div>
       <h1>Time Tracker</h1>
       <p class="muted">Войдите или создайте аккаунт</p>
+      <p class="muted hint">Пароль: минимум 6 символов</p>
+      <p id="cloudNote" class="muted hint hidden"></p>
       <label>Логин<input id="loginInput" autocomplete="off" spellcheck="false"></label>
       <label>Пароль<input id="passInput" type="password" autocomplete="off"></label>
       <div id="authError" class="error"></div>
@@ -45,6 +47,7 @@
       <div id="updateBar" class="update hidden"></div>
 
       <div class="user">
+        <div id="syncState" class="sync"></div>
         <span><span id="userName"></span> <small id="ver" class="muted"></small></span>
         <button id="logoutBtn" class="btn small">Выйти</button>
       </div>
@@ -61,6 +64,8 @@
   </div>
 
   <div id="tip" class="tip"></div>
+  <script src="cloud-config.js"></script>
+  <script src="cloud.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

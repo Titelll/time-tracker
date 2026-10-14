@@ -42,6 +42,7 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 /* ======================= state ======================= */
 let db = { accounts: {}, lastLogin: '' };
 let user = null;
+let ACC = null; // запись текущего аккаунта (пароль, облако, данные)
 let A = null; // data of current account
 let view = 'tasks';
 let selKey = dateKey(new Date());
@@ -50,7 +51,9 @@ let weekStart = mondayOf(new Date());
 let hoverSlice = -1;
 let tickCount = 0;
 
-const save = () => window.api.save(db);
+const persist = () => window.api.save(db);
+// Любое изменение данных: помечаем время правки, сохраняем и ставим синхронизацию в очередь
+const save = () => { if (A) A._u = Date.now(); persist(); scheduleSync(); };
 
 function normalize(a) {
   a.timer = a.timer || { running: false, startedAt: null, task: '' };
@@ -58,6 +61,7 @@ function normalize(a) {
   a.tasks = a.tasks || [];
   a.days = a.days || {};
   a.goals = a.goals || [];
+  return a;
 }
 
 /* ======================= data ======================= */
@@ -618,13 +622,160 @@ function renderGoals() {
   }));
 }
 
+/* ======================= cloud sync ======================= */
+const tokens = new WeakMap(); // idToken живёт только в памяти
+let syncing = false, syncAgain = null, syncTimer = null;
+
+function setSync(text, cls) {
+  const el = $('#syncState');
+  if (el) { el.textContent = text; el.className = 'sync ' + (cls || ''); }
+}
+
+function typing() {
+  const ae = document.activeElement;
+  return !!(ae && /INPUT|TEXTAREA|SELECT/.test(ae.tagName) && $('#app').contains(ae));
+}
+
+function scheduleSync() {
+  if (!Cloud.enabled() || !ACC || !ACC.uid) return;
+  const acc = ACC;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => syncNow(acc), 3000);
+}
+
+async function getToken(acc) {
+  const t = tokens.get(acc);
+  if (t && Date.now() < t.exp - 60000) return t.id;
+  const reauth = () => { const e = new Error('reauth'); e.code = 'reauth'; return e; };
+  if (!acc.refreshToken) throw reauth();
+  try {
+    const r = await Cloud.refresh(acc.refreshToken);
+    acc.refreshToken = r.refreshToken || acc.refreshToken;
+    tokens.set(acc, { id: r.idToken, exp: r.exp });
+    persist();
+    return r.idToken;
+  } catch (e) {
+    if (e.code === 'network') throw e;
+    throw reauth();
+  }
+}
+
+// Слияние при конфликте (правки на двух устройствах): записи объединяются, остальное берётся из более новой версии
+function mergeData(a, b) {
+  const [older, newer] = (a._u || 0) >= (b._u || 0) ? [b, a] : [a, b];
+  const out = JSON.parse(JSON.stringify(newer));
+  const seen = new Set(out.sessions.map((x) => x.id));
+  for (const x of older.sessions || []) if (!seen.has(x.id)) out.sessions.push(x);
+  out.sessions.sort((x, y) => x.start - y.start);
+  for (const t of older.tasks || []) if (!out.tasks.some((x) => x.toLowerCase() === t.toLowerCase())) out.tasks.push(t);
+  out.days = { ...(older.days || {}), ...(out.days || {}) };
+  const gids = new Set(out.goals.map((g) => g.id));
+  for (const g of older.goals || []) if (!gids.has(g.id)) out.goals.push(g);
+  return out;
+}
+
+function adopt(acc, data, base) {
+  acc.data = data; acc.base = base; persist();
+  if (ACC !== acc) return;
+  A = acc.data; normalize(A);
+  if (A.timer.running) setTaskInputs(A.timer.task || '');
+  renderView();
+}
+
+async function syncNow(acc = ACC) {
+  if (!Cloud.enabled() || !acc || !acc.uid) return;
+  if (syncing) { syncAgain = acc; return; }
+  syncing = true;
+  const show = (t, c) => { if (ACC === acc) setSync(t, c); };
+  show('Синхронизация…', '');
+  try {
+    const token = await getToken(acc);
+    const remote = await Cloud.getDoc(acc.uid, token);
+    const local = acc.data;
+    const base = acc.base || 0;
+    const lu = local._u || 0;
+    const put = async (data, ts) => {
+      if (JSON.stringify(data).length > 900000) { const e = new Error('toolarge'); e.code = 'toolarge'; throw e; }
+      await Cloud.putDoc(acc.uid, token, data, ts);
+      acc.base = ts; persist();
+    };
+    if (!remote || !remote.data) {
+      local._u = lu || Date.now();
+      await put(local, local._u);
+    } else if (remote.updatedAt === base) {
+      if (lu > base) await put(local, lu);
+    } else if (ACC === acc && typing()) {
+      syncTimer = setTimeout(() => syncNow(acc), 5000);
+      show('Ждём окончания ввода…', '');
+      return;
+    } else {
+      const rd = normalize(remote.data);
+      if (lu <= base) {
+        adopt(acc, rd, remote.updatedAt);
+      } else {
+        const merged = mergeData(local, rd);
+        merged._u = Date.now();
+        await put(merged, merged._u);
+        adopt(acc, merged, merged._u);
+      }
+    }
+    show('Облако: синхронизировано ' + fmtClock(Date.now()), 'ok');
+  } catch (e) {
+    if (e.code === 'network') show('Нет связи. Данные сохранены на этом устройстве', '');
+    else if (e.code === 'denied') show('Нет доступа к облаку. Проверьте правила Firestore', 'err');
+    else if (e.code === 'toolarge') show('Данных слишком много для облака', 'err');
+    else if (e.code === 'reauth') show('Войдите заново, чтобы продолжить синхронизацию', 'err');
+    else show('Ошибка синхронизации', 'err');
+  } finally {
+    syncing = false;
+    if (syncAgain) { const a = syncAgain; syncAgain = null; setTimeout(() => syncNow(a), 500); }
+  }
+}
+
 /* ======================= auth ======================= */
-function enterApp(login) {
+function authError(msg) { $('#authError').textContent = msg; }
+function busy(on) {
+  $('#loginBtn').disabled = on; $('#registerBtn').disabled = on;
+  if (on) authError('Подождите…');
+  else if ($('#authError').textContent === 'Подождите…') authError('');
+}
+const findKey = (l) => Object.keys(db.accounts).find((k) => k.toLowerCase() === l.toLowerCase());
+const isBadCreds = (e) => ['INVALID_LOGIN_CREDENTIALS', 'EMAIL_NOT_FOUND', 'INVALID_PASSWORD', 'INVALID_EMAIL'].includes(e.code);
+
+function cloudMsg(e) {
+  const m = {
+    network: 'Нет связи с сервером. Проверьте интернет.',
+    EMAIL_EXISTS: 'Такой аккаунт уже есть. Нажмите «Войти».',
+    WEAK_PASSWORD: 'Пароль слишком простой: нужно минимум 6 символов.',
+    TOO_MANY_ATTEMPTS_TRY_LATER: 'Слишком много попыток. Подождите немного и повторите.',
+    OPERATION_NOT_ALLOWED: 'В Firebase не включён вход по email и паролю.',
+    API_KEY: 'Неверный apiKey в файле cloud-config.js.'
+  };
+  return m[e.code] || 'Ошибка облака: ' + (e.message || e.code);
+}
+
+// Проверка пароля на этом устройстве. Старые аккаунты (пароль открытым текстом) переводятся на хеш.
+async function verifyLocal(acc, p) {
+  if (acc.pass) return window.api.verify(p, acc.pass);
+  if (acc.password !== undefined && acc.password === p) {
+    acc.pass = await window.api.hash(p);
+    delete acc.password;
+    persist();
+    return true;
+  }
+  return false;
+}
+
+async function enterApp(login) {
   user = login;
-  A = db.accounts[login].data;
+  ACC = db.accounts[login];
+  ACC.data = ACC.data || {};
+  A = ACC.data;
   normalize(A);
   db.lastLogin = login;
-  save();
+  persist();
+  if (Cloud.enabled() && ACC.uid && !ACC.base) await syncNow(ACC); // новое устройство: сначала подтягиваем данные
+  A = ACC.data;
   $('#auth').classList.add('hidden');
   $('#app').classList.remove('hidden');
   $('#userName').textContent = login;
@@ -634,13 +785,16 @@ function enterApp(login) {
   const n = new Date();
   vm = { y: n.getFullYear(), m: n.getMonth() };
   weekStart = mondayOf(n);
+  setSync(Cloud.enabled() && ACC.uid ? 'Облако: подключение…' : 'Облако не настроено: данные только на этом компьютере', '');
   renderView();
+  if (ACC.uid) syncNow(ACC);
 }
 
 function logout() {
   closeFocus();
   if (A && A.timer.running) { A.timer.task = $('#taskInput').value.trim(); save(); }
-  user = null; A = null;
+  if (ACC && ACC.uid) { clearTimeout(syncTimer); syncNow(ACC); } // последние изменения уходят в облако
+  user = null; A = null; ACC = null;
   $('#app').classList.add('hidden');
   $('#auth').classList.remove('hidden');
   $('#passInput').value = '';
@@ -649,22 +803,74 @@ function logout() {
   hideTip();
 }
 
-function authError(msg) { $('#authError').textContent = msg; }
-
-function doLogin() {
+async function doLogin() {
   const l = $('#loginInput').value.trim(), p = $('#passInput').value;
   if (!l || !p) return authError('Введите логин и пароль.');
-  const acc = db.accounts[l];
-  if (!acc || acc.password !== p) return authError('Неверный логин или пароль.');
-  enterApp(l);
+  busy(true);
+  try {
+    const key = findKey(l);
+    const acc = key ? db.accounts[key] : null;
+
+    if (!Cloud.enabled()) {
+      if (!acc || !(await verifyLocal(acc, p))) return authError('Неверный логин или пароль.');
+      return await enterApp(key);
+    }
+
+    const email = await window.api.emailFor(l);
+    let session;
+    try {
+      session = await Cloud.signIn(email, p);
+    } catch (e) {
+      if (e.code === 'network') {
+        // нет интернета: входим по локальному хешу пароля
+        if (acc && (await verifyLocal(acc, p))) return await enterApp(key);
+        return authError(acc ? 'Неверный логин или пароль.' : 'Нет связи с сервером. Проверьте интернет.');
+      }
+      if (!isBadCreds(e)) return authError(cloudMsg(e));
+      if (acc && (await verifyLocal(acc, p))) {
+        // аккаунт был создан до появления облака: переносим его в облако
+        try { session = await Cloud.signUp(email, p); }
+        catch (e2) {
+          if (e2.code === 'EMAIL_EXISTS') return authError('Такой аккаунт уже есть в облаке с другим паролем.');
+          return authError(cloudMsg(e2));
+        }
+      } else {
+        return authError('Неверный логин или пароль.');
+      }
+    }
+
+    const k = key || l;
+    const a = db.accounts[k] || (db.accounts[k] = { data: {} });
+    a.pass = await window.api.hash(p);
+    delete a.password;
+    a.uid = session.uid;
+    a.refreshToken = session.refreshToken;
+    tokens.set(a, { id: session.idToken, exp: session.exp });
+    await enterApp(k);
+  } finally {
+    busy(false);
+  }
 }
 
-function doRegister() {
+async function doRegister() {
   const l = $('#loginInput').value.trim(), p = $('#passInput').value;
   if (!l || !p) return authError('Введите логин и пароль.');
-  if (db.accounts[l]) return authError('Такой аккаунт уже есть. Нажмите «Войти».');
-  db.accounts[l] = { password: p, data: {} };
-  enterApp(l);
+  if (p.length < 6) return authError('Пароль должен быть не короче 6 символов.');
+  if (findKey(l)) return authError('Такой аккаунт уже есть. Нажмите «Войти».');
+  busy(true);
+  try {
+    let session = null;
+    if (Cloud.enabled()) {
+      try { session = await Cloud.signUp(await window.api.emailFor(l), p); }
+      catch (e) { return authError(e.code === 'network' ? 'Нет связи с сервером. Аккаунт можно создать только при подключении к интернету.' : cloudMsg(e)); }
+    }
+    const a = { pass: await window.api.hash(p), data: {} };
+    if (session) { a.uid = session.uid; a.refreshToken = session.refreshToken; tokens.set(a, { id: session.idToken, exp: session.exp }); }
+    db.accounts[l] = a;
+    await enterApp(l);
+  } finally {
+    busy(false);
+  }
 }
 
 /* ======================= updates ======================= */
@@ -704,6 +910,13 @@ function renderUpdate(s) {
   $('#clock').ondblclick = openFocus;
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeFocus(); });
   document.querySelectorAll('.nav button').forEach((b) => (b.onclick = () => { view = b.dataset.view; renderView(); }));
+  if (!Cloud.enabled()) {
+    $('#cloudNote').textContent = 'Облако не настроено: данные хранятся только на этом компьютере';
+    $('#cloudNote').classList.remove('hidden');
+  }
+  $('#syncState').onclick = () => syncNow();
+  setInterval(() => syncNow(), 60000);
+  window.addEventListener('focus', () => syncNow());
   window.api.version().then((v) => ($('#ver').textContent = 'v' + v));
   window.api.onUpdate(renderUpdate);
   window.api.updateStatus().then(renderUpdate);
