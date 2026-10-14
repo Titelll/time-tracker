@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Time Tracker</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <section id="auth" class="auth">
+    <div class="auth-card">
+      <div class="auth-clock">00:00:00</div>
+      <h1>Time Tracker</h1>
+      <p class="muted">Войдите или создайте аккаунт</p>
+      <label>Логин<input id="loginInput" autocomplete="off" spellcheck="false"></label>
+      <label>Пароль<input id="passInput" type="password" autocomplete="off"></label>
+      <div id="authError" class="error"></div>
+      <div class="auth-actions">
+        <button id="loginBtn" class="btn primary">Войти</button>
+        <button id="registerBtn" class="btn">Создать аккаунт</button>
+      </div>
+    </div>
+  </section>
+
+  <div id="app" class="app hidden">
+    <aside class="side">
+      <div class="brand">Time Tracker</div>
+
+      <div class="timer" id="timerBox">
+        <div id="clock" class="clock">00:00:00</div>
+        <input id="taskInput" list="taskList" placeholder="Над чем работаете?" autocomplete="off">
+        <datalist id="taskList"></datalist>
+        <button id="toggleBtn" class="btn primary wide">Старт</button>
+        <div class="today">Сегодня: <b id="todayTotal">0 м</b></div>
+      </div>
+
+      <nav class="nav">
+        <button data-view="tasks" class="active">Задачи</button>
+        <button data-view="calendar">Календарь</button>
+        <button data-view="week">Неделя</button>
+        <button data-view="goals">Цели</button>
+      </nav>
+
+      <div id="updateBar" class="update hidden"></div>
+
+      <div class="user">
+        <span><span id="userName"></span> <small id="ver" class="muted"></small></span>
+        <button id="logoutBtn" class="btn small">Выйти</button>
+      </div>
+    </aside>
+    <main id="main" class="main"></main>
+  </div>
+
+  <div id="tip" class="tip"></div>
+  <script src="renderer.js"></script>
+</body>
+</html>
