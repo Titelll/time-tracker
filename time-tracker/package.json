@@ -1,6 +1,6 @@
 {
   "name": "time-tracker",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Таймер с календарём, задачами, недельной аналитикой и целями",
   "main": "main.js",
   "author": "you",
@@ -54,10 +54,13 @@
       ]
     },
     "publish": [
-      {
-        "provider": "github",
-        "owner": "Titelll",
-        "repo": "time-tracker"
+  {
+    "provider": "github",
+    "owner": "Titelll",
+    "repo": "time-tracker",
+    "releaseType": "release"
+  }
+]"
       }
     ]
   },
