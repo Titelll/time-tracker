@@ -1,6 +1,6 @@
 {
   "name": "time-tracker",
-  "version": "1.0.3",
+  "version": "1.0.0",
   "description": "Таймер с календарём, задачами, недельной аналитикой и целями",
   "main": "main.js",
   "author": "you",
