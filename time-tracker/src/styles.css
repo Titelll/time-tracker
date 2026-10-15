@@ -234,3 +234,22 @@ input[type=color] { width: 34px; height: 28px; padding: 2px; border-radius: 7px;
 .sync { width: 100%; font-size: 12px; color: var(--muted); cursor: pointer; }
 .sync.ok { color: var(--green); }
 .sync.err { color: var(--red); }
+
+/* ---------- remember me ---------- */
+.auth-card label.remember { flex-direction: row; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+.auth-card label.remember input { width: auto; accent-color: var(--amber); }
+
+/* ---------- line chart ---------- */
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin-right: 8px; }
+.seg button { background: none; border: 0; color: var(--muted); padding: 6px 14px; cursor: pointer; }
+.seg button:hover { color: var(--text); }
+.seg button.on { background: var(--raised); color: var(--text); }
+.chart-top { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; margin-bottom: 8px; }
+.chart-top select { max-width: 220px; }
+.big { font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.chart-wrap svg { display: block; width: 100%; height: auto; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.chart-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.lg { display: inline-block; width: 20px; height: 0; }
+.lg.line { border-top: 3px solid var(--amber); border-radius: 2px; }
+.lg.dash { border-top: 2px dashed var(--green); }

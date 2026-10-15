@@ -10,7 +10,6 @@ const MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', '�
 const MONTHS_GEN = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
 const DOW = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 const DOW_FULL = ['воскресенье', 'понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота'];
-const PALETTE = ['#f0b45a', '#3ecf8e', '#6aa7ff', '#c084fc', '#ef6461', '#2dd4bf', '#f472b6', '#a3e635', '#fb923c', '#94a3b8'];
 const MARK_COLORS = ['#ff4d4d', '#ff9f1a', '#ffd60a', '#2f9bff', '#a35cff', '#ff4fa3', '#14d9e6', '#c3cee3'];
 
 const fmtHMS = (ms) => {
@@ -47,8 +46,9 @@ let A = null; // data of current account
 let view = 'tasks';
 let selKey = dateKey(new Date());
 let vm = { y: new Date().getFullYear(), m: new Date().getMonth() };
-let weekStart = mondayOf(new Date());
-let hoverSlice = -1;
+let chartMode = 'week'; // week | month | year
+let chartAnchor = new Date();
+let chartTask = '';
 let tickCount = 0;
 
 const persist = () => window.api.save(db);
@@ -421,149 +421,195 @@ function renderDayPanel(idx) {
   }));
 }
 
-/* ---------- week ---------- */
+/* ---------- stats: график часов ---------- */
+const cap = (x) => x.charAt(0).toUpperCase() + x.slice(1);
+
+function dayGoalMs(task) {
+  const t = (task || '').trim().toLowerCase();
+  const g = A.goals.find((x) => x.period === 'day' && (x.task || '').trim().toLowerCase() === t);
+  return g ? g.hours * 3600000 : 0;
+}
+
+function chartData(idx) {
+  const task = chartTask.trim().toLowerCase();
+  const today0 = sod(Date.now()).getTime();
+  const goalDay = dayGoalMs(chartTask);
+  const pick = (tasksObj) => {
+    let ms = 0; const parts = [];
+    for (const [nm, v] of Object.entries(tasksObj || {})) {
+      if (task && nm.trim().toLowerCase() !== task) continue;
+      ms += v; parts.push([nm, v]);
+    }
+    parts.sort((a, b) => b[1] - a[1]);
+    return { ms, parts };
+  };
+  const a = chartAnchor;
+  const points = [];
+  let title;
+  if (chartMode === 'year') {
+    const y = a.getFullYear();
+    const agg = Array.from({ length: 12 }, () => ({}));
+    for (const [key, info] of Object.entries(idx)) {
+      if (Number(key.slice(0, 4)) !== y) continue;
+      const m = Number(key.slice(5, 7)) - 1;
+      for (const [nm, v] of Object.entries(info.tasks)) agg[m][nm] = (agg[m][nm] || 0) + v;
+    }
+    for (let m = 0; m < 12; m++) {
+      points.push({
+        short: MONTHS[m].slice(0, 3), long: `${MONTHS[m]} ${y}`, ...pick(agg[m]),
+        future: new Date(y, m, 1).getTime() > today0, goal: goalDay * new Date(y, m + 1, 0).getDate()
+      });
+    }
+    title = String(y);
+  } else {
+    let start, n;
+    if (chartMode === 'week') {
+      start = mondayOf(a); n = 7;
+      const end = addDays(start, 6);
+      title = `${start.getDate()} ${start.getMonth() === end.getMonth() ? '' : MONTHS_GEN[start.getMonth()] + ' '}– ${end.getDate()} ${MONTHS_GEN[end.getMonth()]} ${end.getFullYear()}`;
+    } else {
+      start = new Date(a.getFullYear(), a.getMonth(), 1);
+      n = new Date(a.getFullYear(), a.getMonth() + 1, 0).getDate();
+      title = `${MONTHS[a.getMonth()]} ${a.getFullYear()}`;
+    }
+    for (let i = 0; i < n; i++) {
+      const d = addDays(start, i);
+      const info = idx[dateKey(d)];
+      points.push({
+        short: chartMode === 'week' ? `${DOW[i]} ${d.getDate()}` : String(d.getDate()),
+        long: `${cap(DOW_FULL[d.getDay()])}, ${d.getDate()} ${MONTHS_GEN[d.getMonth()]}`,
+        ...pick(info && info.tasks), future: d.getTime() > today0, goal: goalDay
+      });
+    }
+  }
+  const last = points.reduce((acc, pt, i) => (pt.future ? acc : i), -1);
+  const total = points.reduce((sum, pt, i) => sum + (i <= last ? pt.ms : 0), 0);
+  return { title, points, last, goalDay, total };
+}
+
+function shiftChart(dir) {
+  const a = chartAnchor;
+  if (chartMode === 'week') chartAnchor = addDays(a, 7 * dir);
+  else if (chartMode === 'month') chartAnchor = new Date(a.getFullYear(), a.getMonth() + dir, 1);
+  else chartAnchor = new Date(a.getFullYear() + dir, 0, 1);
+  renderView();
+}
+
 function renderWeek() {
   const idx = buildIndex();
-  const days = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
-  const totals = {};
-  const perDay = days.map((d) => {
-    const info = idx[dateKey(d)];
-    if (info) Object.entries(info.tasks).forEach(([n, ms]) => (totals[n] = (totals[n] || 0) + ms));
-    return info ? info.total : 0;
-  });
-  const items = Object.entries(totals).sort((a, b) => b[1] - a[1]).map(([name, ms], i) => ({ name, ms, color: PALETTE[i % PALETTE.length] }));
-  const sum = items.reduce((s, x) => s + x.ms, 0);
-  const end = days[6];
-  const finished = end < sod(Date.now());
-  const range = `${days[0].getDate()} ${days[0].getMonth() === end.getMonth() ? '' : MONTHS_GEN[days[0].getMonth()] + ' '}– ${end.getDate()} ${MONTHS_GEN[end.getMonth()]} ${end.getFullYear()}`;
-  const maxDay = Math.max(...perDay, 1);
+  if (chartTask && !A.tasks.includes(chartTask)) chartTask = '';
+  const d = chartData(idx);
+  const taskOpts = ['<option value="">Все задачи</option>']
+    .concat(A.tasks.filter((x) => x !== 'Без задачи').map((x) => `<option value="${esc(x)}" ${x === chartTask ? 'selected' : ''}>${esc(x)}</option>`)).join('');
+  const names = { week: 'Неделя', month: 'Месяц', year: 'Год' };
 
   $('#main').innerHTML = `
     <div class="page-head">
-      <div style="display:flex;align-items:center;gap:12px"><h2>${range}</h2>${finished ? '<span class="badge">неделя завершена</span>' : ''}</div>
+      <h2>${esc(d.title)}</h2>
       <div class="nav-ctrl">
-        <button class="btn small" id="prevW">‹</button>
-        <button class="btn small" id="thisW">Эта неделя</button>
-        <button class="btn small" id="nextW">›</button>
+        <div class="seg">${['week', 'month', 'year'].map((k) => `<button data-mode="${k}" class="${chartMode === k ? 'on' : ''}">${names[k]}</button>`).join('')}</div>
+        <button class="btn small" id="prevP">‹</button>
+        <button class="btn small" id="thisP">Сегодня</button>
+        <button class="btn small" id="nextP">›</button>
       </div>
     </div>
     <div class="card">
-      <h3>На что ушло время</h3>
-      ${sum ? `
-      <div class="week-layout">
-        <div class="pie-wrap"><canvas id="pie"></canvas></div>
-        <div class="legend">
-          ${items.map((it, i) => `
-            <div class="item" data-i="${i}">
-              <span class="swatch" style="background:${it.color}"></span>
-              <span class="name" title="${esc(it.name)}">${esc(it.name)}</span>
-              <span class="time">${fmtDur(it.ms)}</span>
-              <span class="pct">${Math.round((it.ms / sum) * 100)}%</span>
-            </div>`).join('')}
+      <div class="chart-top">
+        <div>
+          <div class="muted" style="font-size:13px">Часы по ${chartMode === 'year' ? 'месяцам' : 'дням'}</div>
+          <div class="big">${fmtDur(d.total)}</div>
         </div>
-      </div>` : '<div class="empty">За эту неделю нет записей.</div>'}
-    </div>
-    <div class="card">
-      <h3>По дням</h3>
-      <div class="bars">
-        ${days.map((d, i) => `
-          <div class="bar ${perDay[i] ? '' : 'zero'}" data-day="${i}">
-            <em>${perDay[i] ? fmtShort(perDay[i]) : ''}</em>
-            <i style="height:${Math.max(2, (perDay[i] / maxDay) * 80)}px"></i>
-            <span>${DOW[i]} ${d.getDate()}</span>
-          </div>`).join('')}
+        <select id="chartTask">${taskOpts}</select>
       </div>
+      <div class="chart-wrap"><svg id="chart" viewBox="0 0 860 320" width="100%" role="img" aria-label="График часов"></svg></div>
+      <div class="chart-legend">
+        <span><i class="lg line"></i>Часы</span>
+        ${d.goalDay
+          ? `<span><i class="lg dash"></i>Цель: ${fmtDur(d.goalDay)} в день${chartMode === 'year' ? ' (в месяц: умножается на число дней)' : ''}</span>`
+          : '<span class="muted">Пунктирная линия цели появится, когда вы поставите цель «в день» на вкладке «Цели».</span>'}
+      </div>
+      ${d.last < 0 ? '<div class="empty">Этот период ещё не наступил.</div>' : (d.total === 0 ? '<div class="empty">Нет записей за этот период.</div>' : '')}
     </div>`;
 
-  $('#prevW').onclick = () => { weekStart = addDays(weekStart, -7); renderView(); };
-  $('#nextW').onclick = () => { weekStart = addDays(weekStart, 7); renderView(); };
-  $('#thisW').onclick = () => { weekStart = mondayOf(new Date()); renderView(); };
-
-  if (sum) setupPie(items, sum);
+  $('#main').querySelectorAll('[data-mode]').forEach((b) => (b.onclick = () => { chartMode = b.dataset.mode; chartAnchor = new Date(); renderView(); }));
+  $('#prevP').onclick = () => shiftChart(-1);
+  $('#nextP').onclick = () => shiftChart(1);
+  $('#thisP').onclick = () => { chartAnchor = new Date(); renderView(); };
+  $('#chartTask').onchange = (e) => { chartTask = e.target.value; renderView(); };
+  drawChart(d);
 }
 
-function setupPie(items, sum) {
-  const canvas = $('#pie');
-  const size = 320;
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = size * dpr; canvas.height = size * dpr;
-  canvas.style.width = size + 'px'; canvas.style.height = size + 'px';
-  const ctx = canvas.getContext('2d');
-  const cx = size / 2, cy = size / 2, R = 140, r = 84;
-  hoverSlice = -1;
+function drawChart(d) {
+  const svg = $('#chart');
+  const W = 860, H = 320, L = 48, R = 18, T = 14, B = 32;
+  const pts = d.points, n = pts.length;
+  const vals = pts.map((x) => x.ms / 3600000);
+  const goals = pts.map((x) => x.goal / 3600000);
+  const hasGoal = goals.some((g) => g > 0);
+  const max = Math.max(0, ...vals.filter((_, i) => i <= d.last), ...(hasGoal ? goals : []));
+  const step = max === 0 ? 1 : ([0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500].find((st) => max * 1.1 / st <= 4.5) || 1000);
+  const ymax = max === 0 ? 4 : Math.ceil(max * 1.1 / step) * step;
+  const X = (i) => L + i * (W - L - R) / (n - 1);
+  const Y = (v) => T + (H - T - B) * (1 - v / ymax);
+  const lbl = (v) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
 
-  const draw = () => {
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, size, size);
-    let a = -Math.PI / 2;
-    items.forEach((it, i) => {
-      const ang = (it.ms / sum) * Math.PI * 2;
-      const hov = i === hoverSlice;
-      const out = hov ? R + 7 : R;
-      ctx.beginPath();
-      ctx.arc(cx, cy, out, a, a + ang);
-      ctx.arc(cx, cy, r, a + ang, a, true);
-      ctx.closePath();
-      ctx.fillStyle = it.color;
-      ctx.globalAlpha = hoverSlice === -1 || hov ? 1 : 0.45;
-      ctx.fill();
-      ctx.globalAlpha = 1;
-      ctx.lineWidth = 2; ctx.strokeStyle = '#161b24'; ctx.stroke();
-      a += ang;
-    });
-    ctx.textAlign = 'center'; ctx.fillStyle = '#e7eaf0';
-    ctx.font = '600 24px -apple-system, "Segoe UI", sans-serif';
-    ctx.fillText(hoverSlice >= 0 ? `${Math.round((items[hoverSlice].ms / sum) * 100)}%` : fmtDur(sum), cx, cy + 4);
-    ctx.fillStyle = '#8a94a6'; ctx.font = '12px -apple-system, "Segoe UI", sans-serif';
-    ctx.fillText(hoverSlice >= 0 ? fmtDur(items[hoverSlice].ms) : 'за неделю', cx, cy + 24);
-  };
-
-  const setHover = (i) => {
-    hoverSlice = i;
-    draw();
-    document.querySelectorAll('.legend .item').forEach((el) => el.classList.toggle('hl', Number(el.dataset.i) === i));
-  };
-
-  canvas.onmousemove = (e) => {
-    const rect = canvas.getBoundingClientRect();
-    const dx = e.clientX - rect.left - cx, dy = e.clientY - rect.top - cy;
-    const dist = Math.hypot(dx, dy);
-    if (dist < r - 4 || dist > R + 8) { setHover(-1); return hideTip(); }
-    let ang = Math.atan2(dy, dx) + Math.PI / 2;
-    if (ang < 0) ang += Math.PI * 2;
-    let acc = 0, found = -1;
-    for (let i = 0; i < items.length; i++) {
-      acc += (items[i].ms / sum) * Math.PI * 2;
-      if (ang <= acc) { found = i; break; }
+  let h = '';
+  for (let v = 0; v <= ymax + 1e-9; v += step) {
+    h += `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" style="stroke:var(--line);stroke-width:1"/>`;
+    h += `<text x="${L - 8}" y="${Y(v) + 4}" text-anchor="end" font-size="11" style="fill:var(--muted)">${lbl(v)}${v + step > ymax + 1e-9 ? ' ч' : ''}</text>`;
+  }
+  pts.forEach((pt, i) => {
+    if (n > 14 ? ((i + 1) % 5 === 0 || i === 0) : true) {
+      h += `<text x="${X(i)}" y="${H - 10}" text-anchor="middle" font-size="11" style="fill:var(--muted)">${esc(pt.short)}</text>`;
     }
-    if (found !== hoverSlice) setHover(found);
-    if (found >= 0) {
-      const it = items[found];
-      showTip(`<b>${esc(it.name)}</b><div class="tl"><span>Время</span><span>${fmtDur(it.ms)} · ${fmtDec(it.ms)}</span></div><div class="tl"><span>Доля</span><span>${Math.round((it.ms / sum) * 1000) / 10}%</span></div>`, e.clientX, e.clientY);
-    }
-  };
-  canvas.onmouseleave = () => { setHover(-1); hideTip(); };
-  document.querySelectorAll('.legend .item').forEach((el) => {
-    el.onmouseenter = () => setHover(Number(el.dataset.i));
-    el.onmouseleave = () => setHover(-1);
   });
-  draw();
+  if (hasGoal) {
+    h += `<polyline points="${goals.map((g, i) => `${X(i)},${Y(g)}`).join(' ')}" fill="none" style="stroke:var(--green);stroke-width:1.5;stroke-dasharray:6 5"/>`;
+  }
+  if (d.last >= 0) {
+    const lp = vals.slice(0, d.last + 1).map((v, i) => `${X(i)},${Y(v)}`);
+    h += `<path d="M${X(0)},${Y(0)} L${lp.join(' L')} L${X(d.last)},${Y(0)} Z" style="fill:var(--amber);fill-opacity:.14"/>`;
+    h += `<polyline points="${lp.join(' ')}" fill="none" style="stroke:var(--amber);stroke-width:2;stroke-linejoin:round;stroke-linecap:round"/>`;
+    h += `<circle cx="${X(d.last)}" cy="${Y(vals[d.last])}" r="4" style="fill:var(--amber);stroke:var(--panel);stroke-width:2"/>`;
+  }
+  h += `<line id="chartXh" y1="${T}" y2="${H - B}" style="stroke:var(--line);stroke-dasharray:3 3;stroke-width:1" opacity="0"/>`;
+  h += `<circle id="chartDot" r="5" style="fill:var(--amber);stroke:var(--panel);stroke-width:2" opacity="0"/>`;
+  h += `<rect id="chartHit" x="${L}" y="0" width="${W - L - R}" height="${H}" fill="transparent"/>`;
+  svg.innerHTML = h;
+
+  const xh = $('#chartXh'), dot = $('#chartDot'), hit = $('#chartHit');
+  const clear = () => { xh.setAttribute('opacity', 0); dot.setAttribute('opacity', 0); hideTip(); };
+  hit.onmousemove = (e) => {
+    const r = svg.getBoundingClientRect();
+    const i = Math.round(((e.clientX - r.left) / (r.width / W) - L) / ((W - L - R) / (n - 1)));
+    if (!(i >= 0 && i <= d.last)) return clear();
+    const pt = pts[i];
+    xh.setAttribute('x1', X(i)); xh.setAttribute('x2', X(i)); xh.setAttribute('opacity', 1);
+    dot.setAttribute('cx', X(i)); dot.setAttribute('cy', Y(vals[i])); dot.setAttribute('opacity', 1);
+    let t = `<b>${esc(pt.long)}</b><div class="tl"><span>Всего</span><span>${fmtDur(pt.ms)}</span></div>`;
+    pt.parts.slice(0, 5).forEach(([nm, v]) => { t += `<div class="tl"><span>${esc(nm)}</span><span>${fmtDur(v)}</span></div>`; });
+    if (!pt.ms) t += '<div class="muted">Нет записей</div>';
+    if (pt.goal) t += `<div class="tn">Цель: ${fmtDur(pt.goal)}${pt.ms >= pt.goal ? ' · выполнена' : ''}</div>`;
+    showTip(t, e.clientX, e.clientY);
+  };
+  hit.onmouseleave = clear;
 }
 
 /* ---------- goals ---------- */
-const PERIODS = { week: 'в неделю', month: 'в месяц', all: 'всего' };
+const PERIODS = { day: 'в день', week: 'в неделю', month: 'в месяц', all: 'всего' };
 
 function goalDone(g, idx) {
   const now = new Date();
   let from = -Infinity, to = Infinity;
+  if (g.period === 'day') { from = sod(now.getTime()).getTime(); to = addDays(sod(now.getTime()), 1).getTime(); }
   if (g.period === 'week') { from = mondayOf(now).getTime(); to = addDays(mondayOf(now), 7).getTime(); }
   if (g.period === 'month') { from = new Date(now.getFullYear(), now.getMonth(), 1).getTime(); to = new Date(now.getFullYear(), now.getMonth() + 1, 1).getTime(); }
-  const name = g.task.trim().toLowerCase();
+  const name = (g.task || '').trim().toLowerCase();
   let ms = 0;
   for (const [key, info] of Object.entries(idx)) {
     const t = keyToDate(key).getTime();
     if (t < from || t >= to) continue;
-    for (const [n, v] of Object.entries(info.tasks)) if (n.trim().toLowerCase() === name) ms += v;
+    for (const [n, v] of Object.entries(info.tasks)) if (!name || n.trim().toLowerCase() === name) ms += v;
   }
   return ms;
 }
@@ -579,7 +625,7 @@ function renderGoals() {
       return `
         <div class="goal">
           <div class="goal-top">
-            <span class="name">${esc(g.task)}</span>
+            <span class="name">${esc(g.task || 'Все задачи')}</span>
             <span class="muted">${g.hours} ч ${PERIODS[g.period]}</span>
             <button class="x" data-delgoal="${g.id}" title="Удалить цель">×</button>
           </div>
@@ -594,11 +640,11 @@ function renderGoals() {
     <div class="card">
       <h3>Новая цель</h3>
       <div class="row-form">
-        <input id="goalTask" list="goalTaskList" placeholder="Задача" autocomplete="off">
+        <input id="goalTask" list="goalTaskList" placeholder="Задача (пусто: все задачи)" autocomplete="off">
         <datalist id="goalTaskList">${A.tasks.map((t) => `<option value="${esc(t)}">`).join('')}</datalist>
         <input id="goalHours" type="number" min="0.5" step="0.5" placeholder="Часов" style="max-width:110px;flex:none">
         <select id="goalPeriod" style="max-width:140px;flex:none">
-          <option value="week">в неделю</option><option value="month">в месяц</option><option value="all">всего</option>
+          <option value="day">в день</option><option value="week">в неделю</option><option value="month">в месяц</option><option value="all">всего</option>
         </select>
         <button id="addGoal" class="btn primary" style="flex:none">Добавить</button>
       </div>
@@ -609,10 +655,9 @@ function renderGoals() {
   $('#addGoal').onclick = () => {
     const task = $('#goalTask').value.trim();
     const hours = parseFloat(String($('#goalHours').value).replace(',', '.'));
-    if (!task) return ($('#goalErr').textContent = 'Укажите задачу.');
     if (!(hours > 0)) return ($('#goalErr').textContent = 'Укажите количество часов больше нуля.');
-    const t = canonicalTask(task);
-    if (!A.tasks.includes(t)) A.tasks.push(t);
+    let t = '';
+    if (task) { t = canonicalTask(task); if (!A.tasks.includes(t)) A.tasks.push(t); }
     A.goals.push({ id: uid(), task: t, hours, period: $('#goalPeriod').value });
     save(); renderView();
   };
@@ -766,6 +811,12 @@ async function verifyLocal(acc, p) {
   return false;
 }
 
+// Вход с запоминанием на этом устройстве (автовход при следующем запуске)
+function signInTo(login) {
+  db.autoLogin = $('#rememberMe').checked ? login : '';
+  return enterApp(login);
+}
+
 async function enterApp(login) {
   user = login;
   ACC = db.accounts[login];
@@ -784,7 +835,7 @@ async function enterApp(login) {
   selKey = dateKey(new Date());
   const n = new Date();
   vm = { y: n.getFullYear(), m: n.getMonth() };
-  weekStart = mondayOf(n);
+  chartAnchor = n;
   setSync(Cloud.enabled() && ACC.uid ? 'Облако: подключение…' : 'Облако не настроено: данные только на этом компьютере', '');
   renderView();
   if (ACC.uid) syncNow(ACC);
@@ -792,6 +843,7 @@ async function enterApp(login) {
 
 function logout() {
   closeFocus();
+  db.autoLogin = ''; persist(); // после «Выйти» автовход отключается до следующего входа
   if (A && A.timer.running) { A.timer.task = $('#taskInput').value.trim(); save(); }
   if (ACC && ACC.uid) { clearTimeout(syncTimer); syncNow(ACC); } // последние изменения уходят в облако
   user = null; A = null; ACC = null;
@@ -813,7 +865,7 @@ async function doLogin() {
 
     if (!Cloud.enabled()) {
       if (!acc || !(await verifyLocal(acc, p))) return authError('Неверный логин или пароль.');
-      return await enterApp(key);
+      return await signInTo(key);
     }
 
     const email = await window.api.emailFor(l);
@@ -823,7 +875,7 @@ async function doLogin() {
     } catch (e) {
       if (e.code === 'network') {
         // нет интернета: входим по локальному хешу пароля
-        if (acc && (await verifyLocal(acc, p))) return await enterApp(key);
+        if (acc && (await verifyLocal(acc, p))) return await signInTo(key);
         return authError(acc ? 'Неверный логин или пароль.' : 'Нет связи с сервером. Проверьте интернет.');
       }
       if (!isBadCreds(e)) return authError(cloudMsg(e));
@@ -846,7 +898,7 @@ async function doLogin() {
     a.uid = session.uid;
     a.refreshToken = session.refreshToken;
     tokens.set(a, { id: session.idToken, exp: session.exp });
-    await enterApp(k);
+    await signInTo(k);
   } finally {
     busy(false);
   }
@@ -867,7 +919,7 @@ async function doRegister() {
     const a = { pass: await window.api.hash(p), data: {} };
     if (session) { a.uid = session.uid; a.refreshToken = session.refreshToken; tokens.set(a, { id: session.idToken, exp: session.exp }); }
     db.accounts[l] = a;
-    await enterApp(l);
+    await signInTo(l);
   } finally {
     busy(false);
   }
@@ -921,4 +973,5 @@ function renderUpdate(s) {
   window.api.onUpdate(renderUpdate);
   window.api.updateStatus().then(renderUpdate);
   setInterval(tick, 250);
+  if (db.autoLogin && db.accounts[db.autoLogin]) await enterApp(db.autoLogin); // автовход
 })();
